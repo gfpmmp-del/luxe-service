@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: luxe-service
+    runtime: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python server.py"
+    healthCheckPath: /
+    envVars:
+      # пароль для админских ручек — задаётся в панели Render, придумайте свой
+      - key: ADMIN_TOKEN
+        sync: false
+      # адрес самого сервиса, например https://luxe-service.onrender.com
+      # нужен, чтобы отдавать моду полные ссылки на картинки плащей
+      - key: PUBLIC_URL
+        sync: false
+      - key: PORT
+        value: 10000
