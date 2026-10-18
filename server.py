@@ -20,6 +20,8 @@ Render -> Web Service, порт берётся из PORT.
   МОД ПЛАЩЕЙ (внутри игры)
     GET  /api/capes/bulk?u=uuid1,uuid2,...   какие плащи у этих игроков
     GET  /capes/<id>.png                     сама картинка
+    GET  /api/mods                           какие есть сборки мода и для каких версий
+    GET  /mods/<файл>.jar                    сам мод (лаунчер кладёт его в mods/ игры)
 
   АДМИН
     POST /api/admin/cape     добавить плащ в общий каталог (нужен ADMIN_TOKEN)
@@ -50,7 +52,18 @@ BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data"
 CAPES_DIR = DATA_DIR / "capes"
 PRESETS_DIR = BASE_DIR / "presets"
+MODS_DIR = BASE_DIR / "mods"
 DB_PATH = DATA_DIR / "data.json"
+
+# Сборки мода плащей: файл (лежит в mods/) и для каких версий Minecraft он собран.
+# Внутри джарника прописан тот же диапазон версий, так что несовместимая
+# сборка просто не загрузится — но лаунчер и так берёт нужную.
+MODS = [
+    ("luxecape-1.21-1.21.1.jar", ["1.21", "1.21.1"]),
+    ("luxecape-1.21.2-1.21.8.jar", ["1.21.2", "1.21.3", "1.21.4", "1.21.5",
+                                    "1.21.6", "1.21.7", "1.21.8"]),
+    ("luxecape-1.21.9-1.21.11.jar", ["1.21.9", "1.21.10", "1.21.11"]),
+]
 
 CAPES_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -456,6 +469,44 @@ async def cape_file(request: web.Request):
 
 
 # ============================================================
+#  РАЗДАЧА МОДА ПЛАЩЕЙ
+# ============================================================
+
+async def api_mods(request: web.Request):
+    """Что за сборки мода есть и для каких версий — лаунчер выберет сам."""
+    base = PUBLIC_URL or ""
+    items = []
+    for fname, versions in MODS:
+        path = MODS_DIR / fname
+        if not path.exists():
+            continue
+        data = path.read_bytes()
+        items.append({
+            "file": fname,
+            "url": f"{base}/mods/{fname}",
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "size": len(data),
+            "versions": versions,
+        })
+    return ok(mods=items)
+
+
+async def mod_file(request: web.Request):
+    """Jar отдаём только из своего списка — никаких путей снаружи."""
+    name = request.match_info["name"]
+    for fname, _versions in MODS:
+        if fname == name:
+            path = MODS_DIR / fname
+            if not path.exists():
+                break
+            return web.FileResponse(path, headers={
+                "Content-Type": "application/java-archive",
+                "Cache-Control": "public, max-age=600",
+            })
+    raise web.HTTPNotFound()
+
+
+# ============================================================
 #  АДМИН
 # ============================================================
 
@@ -523,6 +574,8 @@ def make_app() -> web.Application:
         web.post("/api/cape/set", api_cape_set),
         web.post("/api/cape/upload", api_cape_upload),
         web.get("/capes/{cid}.png", cape_file),
+        web.get("/api/mods", api_mods),
+        web.get("/mods/{name}", mod_file),
         web.post("/api/admin/cape", api_admin_cape),
         web.post("/api/admin/del", api_admin_del),
     ])
