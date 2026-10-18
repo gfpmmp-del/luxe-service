@@ -79,7 +79,7 @@ def load_db() -> dict:
     if not DB_PATH.exists():
         # Первый запуск: раскладываем плащи, которые есть у всех.
         # Их можно будет удалить, и они не вернутся — сидируем только один раз.
-        db = {"players": {}, "capes": {}}
+        db = {"players": {}, "capes": {}, "by_name": {}}
         for c in DEFAULT_CAPES:
             db["capes"][c["id"]] = {"name": c["name"], "author": c["author"], "builtin": True}
         return db
@@ -88,9 +88,10 @@ def load_db() -> dict:
             d = json.load(f)
         d.setdefault("players", {})
         d.setdefault("capes", {})
+        d.setdefault("by_name", {})
         return d
     except Exception:
-        return {"players": {}, "capes": {}}
+        return {"players": {}, "capes": {}, "by_name": {}}
 
 
 def save_db(db: dict) -> None:
@@ -134,6 +135,30 @@ def clean_id(cid: str) -> str:
         if ch not in "abcdefghijklmnopqrstuvwxyz0123456789-_":
             return ""
     return cid
+
+
+def remember_name(nick: str, uid: str) -> None:
+    """Ник -> uuid. Нужно потому, что у лицензионного игрока uuid от Mojang,
+    а не от ника, и найти его по нику иначе невозможно."""
+    nick = (nick or "").strip().lower()
+    if nick and uid:
+        DB.setdefault("by_name", {})[nick] = uid.lower()
+
+
+def resolve_name(nick: str) -> str:
+    """Ник в uuid: сначала по тому, что запомнили, потом офлайн-расчёт.
+
+    ВАЖНО: регистр нигде не трогаем до расчёта uuid — хеш считается
+    от ника как есть, иначе для ников с заглавными буквами выйдет
+    совсем другой uuid, чем в игре.
+    """
+    raw = (nick or "").strip()
+    if not raw:
+        return ""
+    uid = DB.get("by_name", {}).get(raw.lower())
+    if uid:
+        return uid
+    return offline_uuid(raw).lower()
 
 
 def cape_list() -> list:
@@ -222,6 +247,7 @@ async def api_login(request: web.Request):
         p = player(uid)
         p["name"] = nick
         p["offline"] = False
+        remember_name(nick, uid)
         save_db(DB)
         return ok(session=sess, uuid=uid.lower(), name=nick, offline=False)
 
@@ -235,6 +261,7 @@ async def api_login(request: web.Request):
     p = player(uid)
     p["name"] = nick
     p["offline"] = True
+    remember_name(nick, uid)
     save_db(DB)
     return ok(session=sess, uuid=uid.lower(), name=nick, offline=True)
 
@@ -251,9 +278,10 @@ async def api_heartbeat(request: web.Request):
     ONLINE[uid] = now()
     p = player(uid)
     name = (d.get("name") or "").strip()
-    if name and p["name"] != name:
-        p["name"] = name
-        save_db(DB)
+    if name:
+        if p["name"] != name:
+            p["name"] = name
+        remember_name(name, uid)
     p["last"] = now()
     save_db(DB)
     return ok(ttl=ONLINE_TTL)
@@ -266,7 +294,7 @@ async def api_friends(request: web.Request):
     p = player(uid)
     out = []
     for nick in p.get("friends", []):
-        fu = offline_uuid(nick)
+        fu = resolve_name(nick)
         fp = DB["players"].get(fu.lower(), {})
         out.append({
             "name": nick,
