@@ -49,6 +49,7 @@ PUBLIC_URL = os.getenv("PUBLIC_URL", "").rstrip("/")
 BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data"
 CAPES_DIR = DATA_DIR / "capes"
+PRESETS_DIR = BASE_DIR / "presets"
 DB_PATH = DATA_DIR / "data.json"
 
 CAPES_DIR.mkdir(parents=True, exist_ok=True)
@@ -418,10 +419,12 @@ async def cape_file(request: web.Request):
     cid = clean_id(request.match_info["cid"])
     if not cid:
         raise web.HTTPNotFound()
-    path = CAPES_DIR / (cid + ".png")
-    if not path.exists():
-        raise web.HTTPNotFound()
-    return web.FileResponse(path, headers={"Cache-Control": "public, max-age=600"})
+    # Сначала то, что залили или выбрали в лаунчере, потом встроенные плащи
+    # из репозитория — они переживают любой редеплой.
+    for path in (CAPES_DIR / (cid + ".png"), PRESETS_DIR / (cid + ".png")):
+        if path.exists():
+            return web.FileResponse(path, headers={"Cache-Control": "public, max-age=600"})
+    raise web.HTTPNotFound()
 
 
 # ============================================================
