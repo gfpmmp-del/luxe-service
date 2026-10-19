@@ -68,11 +68,27 @@ POST /api/admin/del   {"id": "flame"}
 Плащи, которые есть у всех с самого начала, перечислены в `server.py` в
 `DEFAULT_CAPES`. Их картинки лежат в папке **`presets/`** прямо в репозитории —
 это значит, что они переживают любой перезапуск и редеплой. Сейчас там
-четыре нарисованных плаща: `luxe`, `flame`, `ice`, `gold`.
+32 нарисованных плаща: `luxe`, `flame`, `ice`, `gold`, `neon`, `emerald`,
+`redstone`, `amethyst`, `obsidian`, `slime`, `creeper`, `skull`, `heart`,
+`star`, `moon`, `sun`, `bolt`, `cosmos`, `nether`, `ender`, `matrix`, `camo`,
+`checker`, `waves`, `clouds`, `sunset`, `rainbow`, `pixel`, `crown`, `sakura`,
+`panda`, `turbox`.
+
+Список отдаётся ручкой `/api/capes`, у каждого плаща есть:
+
+| поле | смысл |
+| --- | --- |
+| `created` | когда плащ появился (по нему сортировка «Новые») |
+| `installs` | сколько раз плащ надевали (растёт при `/api/cape/set`) |
+| `wears` | сколько игроков носят прямо сейчас (по нему «Популярные») |
+
+Порядок можно заказать серверу: `/api/capes?sort=popular` (по умолчанию),
+`?sort=new`, `?sort=name`.
 
 Если кладёте свой плащ в `presets/`, имя файла должно совпадать с `id`,
-и файл должен быть PNG **64x32**. То же самое можно сделать ручкой
-`/api/admin/cape` — тогда картинка ляжет в `data/` и сбросится при редеплое.
+и файл должен быть PNG **64x32**. Новые id из `DEFAULT_CAPES` подхватываются
+сами и на уже работающем сервисе (по одному разу на id: удалённый админом
+плащ не вернётся).
 
 ## Проверка руками (без лаунчера)
 
@@ -110,7 +126,7 @@ Invoke-RestMethod -Uri "https://<адрес>/api/friends" -Headers @{ "X-Session
 | GET | `/api/friends` | лаунчер | друзья и кто из них онлайн |
 | POST | `/api/friends/add` | лаунчер | добавить друга по нику |
 | POST | `/api/friends/del` | лаунчер | убрать друга |
-| GET | `/api/capes` | лаунчер | каталог плащей |
+| GET | `/api/capes` | лаунчер | каталог плащей (`?sort=popular\|new\|name`) |
 | GET | `/api/capes/mine` | лаунчер | что доступно лично мне |
 | POST | `/api/cape/set` | лаунчер | надеть плащ |
 | POST | `/api/cape/upload` | лаунчер | залить свой плащ |

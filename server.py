@@ -12,7 +12,7 @@ Render -> Web Service, порт берётся из PORT.
     GET  /api/friends        мои друзья и кто из них онлайн
     POST /api/friends/add    добавить друга по нику
     POST /api/friends/del    убрать друга
-    GET  /api/capes          каталог плащей
+    GET  /api/capes          каталог плащей (?sort=popular|new|name)
     POST /api/cape/set       надеть плащ (или снять: cape = "")
     POST /api/cape/upload    залить свой плащ (PNG 64x32, base64)
     GET  /api/capes/mine     что доступно лично мне
@@ -74,13 +74,46 @@ ONLINE_TTL = 75          # секунд без heartbeat — считаем, ч�
 MAX_CAPE_BYTES = 256 * 1024
 ALLOWED_CAPE_SIZE = (64, 32)
 
-# Плащи, которые есть у всех с самого начала. Картинки положите
-# рядом в data/capes/ с такими же именами.
+# Плащи, которые есть у всех с самого начала. Картинки лежат рядом
+# в presets/ с такими же именами (см. docstring выше: каталог «из интернета»
+# — это как раз этот список, который лаунчер забирает по /api/capes).
+#
+# created  — когда плащ появился: по нему сортировка «Новые»
+# installs — сколько раз плащ надевали (растёт в /api/cape/set)
+# wears    — сколько игроков носят его прямо сейчас (считается на лету)
 DEFAULT_CAPES = [
-    {"id": "luxe", "name": "Luxe", "author": "Luxe Visuals"},
-    {"id": "flame", "name": "Пламя", "author": "Luxe Visuals"},
-    {"id": "ice", "name": "Лёд", "author": "Luxe Visuals"},
-    {"id": "gold", "name": "Золото", "author": "Luxe Visuals"},
+    {"id": "luxe", "name": "Luxe", "author": "Luxe Visuals", "created": 1766178000},
+    {"id": "flame", "name": "Пламя", "author": "Luxe Visuals", "created": 1766782800},
+    {"id": "ice", "name": "Лёд", "author": "Luxe Visuals", "created": 1767646800},
+    {"id": "gold", "name": "Золото", "author": "Luxe Visuals", "created": 1768683600},
+    {"id": "neon", "name": "Неон", "author": "Luxe Visuals", "created": 1770670800},
+    {"id": "emerald", "name": "Изумруд", "author": "Luxe Visuals", "created": 1771707600},
+    {"id": "redstone", "name": "Редстоун", "author": "Luxe Visuals", "created": 1772658000},
+    {"id": "amethyst", "name": "Аметист", "author": "Luxe Visuals", "created": 1773435600},
+    {"id": "obsidian", "name": "Обсидиан", "author": "Luxe Visuals", "created": 1774645200},
+    {"id": "slime", "name": "Слизень", "author": "Luxe Visuals", "created": 1775250000},
+    {"id": "creeper", "name": "Крипер", "author": "Luxe Visuals", "created": 1775941200},
+    {"id": "skull", "name": "Череп", "author": "Luxe Visuals", "created": 1776632400},
+    {"id": "heart", "name": "Сердце", "author": "Luxe Visuals", "created": 1777669200},
+    {"id": "star", "name": "Звезда", "author": "Luxe Visuals", "created": 1778706000},
+    {"id": "moon", "name": "Луна", "author": "Luxe Visuals", "created": 1779742800},
+    {"id": "sun", "name": "Солнце", "author": "Luxe Visuals", "created": 1780693200},
+    {"id": "bolt", "name": "Молния", "author": "Luxe Visuals", "created": 1781643600},
+    {"id": "cosmos", "name": "Космос", "author": "Luxe Visuals", "created": 1782853200},
+    {"id": "nether", "name": "Нижний мир", "author": "Luxe Visuals", "created": 1784062800},
+    {"id": "ender", "name": "Энд", "author": "Luxe Visuals", "created": 1785186000},
+    {"id": "matrix", "name": "Матрица", "author": "Luxe Visuals", "created": 1785963600},
+    {"id": "camo", "name": "Камуфляж", "author": "Luxe Visuals", "created": 1786914000},
+    {"id": "checker", "name": "Шахматы", "author": "Luxe Visuals", "created": 1787950800},
+    {"id": "waves", "name": "Волны", "author": "Luxe Visuals", "created": 1788642000},
+    {"id": "clouds", "name": "Облака", "author": "Luxe Visuals", "created": 1789333200},
+    {"id": "sunset", "name": "Закат", "author": "Luxe Visuals", "created": 1790024400},
+    {"id": "rainbow", "name": "Радуга", "author": "Luxe Visuals", "created": 1790629200},
+    {"id": "pixel", "name": "Пиксель", "author": "Luxe Visuals", "created": 1791061200},
+    {"id": "crown", "name": "Корона", "author": "Luxe Visuals", "created": 1791406800},
+    {"id": "sakura", "name": "Сакура", "author": "Luxe Visuals", "created": 1791752400},
+    {"id": "panda", "name": "Панда", "author": "Luxe Visuals", "created": 1792011600},
+    {"id": "turbox", "name": "Люкс Турбо", "author": "Luxe Visuals", "created": 1792270800},
 ]
 
 
@@ -88,23 +121,43 @@ def now() -> float:
     return time.time()
 
 
+def seed_defaults(db: dict) -> None:
+    """Добавляет встроенные плащи в каталог — по одному разу на каждый id.
+
+    Так новые плащи из репозитория появляются в каталоге и после редеплоя,
+    но удалённый вручную (админом) плащ больше не возвращается.
+    """
+    seeded = db.setdefault("seeded", [])
+    for c in DEFAULT_CAPES:
+        cid = c["id"]
+        if cid in seeded:
+            continue
+        seeded.append(cid)
+        cur = db["capes"].get(cid) or {}
+        db["capes"][cid] = {
+            "name": cur.get("name") or c["name"],
+            "author": cur.get("author") or c["author"],
+            "builtin": True,
+            "created": cur.get("created", c["created"]),
+            "installs": cur.get("installs", 0),
+        }
+
+
 def load_db() -> dict:
-    if not DB_PATH.exists():
-        # Первый запуск: раскладываем плащи, которые есть у всех.
-        # Их можно будет удалить, и они не вернутся — сидируем только один раз.
-        db = {"players": {}, "capes": {}, "by_name": {}}
-        for c in DEFAULT_CAPES:
-            db["capes"][c["id"]] = {"name": c["name"], "author": c["author"], "builtin": True}
-        return db
-    try:
-        with DB_PATH.open("r", encoding="utf-8") as f:
-            d = json.load(f)
-        d.setdefault("players", {})
-        d.setdefault("capes", {})
-        d.setdefault("by_name", {})
-        return d
-    except Exception:
-        return {"players": {}, "capes": {}, "by_name": {}}
+    db = {"players": {}, "capes": {}, "by_name": {}, "seeded": []}
+    if DB_PATH.exists():
+        try:
+            with DB_PATH.open("r", encoding="utf-8") as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                db.update(d)
+        except Exception:
+            pass
+    db.setdefault("players", {})
+    db.setdefault("capes", {})
+    db.setdefault("by_name", {})
+    seed_defaults(db)
+    return db
 
 
 def save_db(db: dict) -> None:
@@ -174,8 +227,19 @@ def resolve_name(nick: str) -> str:
     return offline_uuid(raw).lower()
 
 
+def wears_map() -> dict:
+    """Сколько игроков прямо сейчас носят каждый плащ — это и есть «популярность»."""
+    out = {}
+    for p in DB.get("players", {}).values():
+        cid = p.get("cape") or ""
+        if cid:
+            out[cid] = out.get(cid, 0) + 1
+    return out
+
+
 def cape_list() -> list:
     """Единственный источник правды — DB['capes']. owner пустой = плащ для всех."""
+    wears = wears_map()
     out = []
     for cid, c in DB["capes"].items():
         out.append({
@@ -184,9 +248,21 @@ def cape_list() -> list:
             "author": c.get("author", ""),
             "owner": c.get("owner", ""),
             "builtin": bool(c.get("builtin")),
+            "created": float(c.get("created", 0) or 0),
+            "installs": int(c.get("installs", 0) or 0),
+            "wears": wears.get(cid, 0),
         })
     out.sort(key=lambda x: (not x["builtin"], x["name"].lower()))
     return out
+
+
+def sort_capes(items: list, order: str) -> list:
+    """Порядок каталога: popular (по умолчанию), new, name."""
+    if order == "new":
+        return sorted(items, key=lambda x: (-x["created"], x["name"].lower()))
+    if order == "name":
+        return sorted(items, key=lambda x: x["name"].lower())
+    return sorted(items, key=lambda x: (-x["wears"], -x["installs"], x["name"].lower()))
 
 
 def cape_url(cid: str) -> str:
@@ -357,7 +433,10 @@ async def api_friends_del(request: web.Request):
 # ============================================================
 
 async def api_capes(request: web.Request):
-    return ok(capes=cape_list())
+    order = (request.query.get("sort") or "popular").strip().lower()
+    if order not in ("popular", "new", "name"):
+        order = "popular"
+    return ok(capes=sort_capes(cape_list(), order), sort=order)
 
 
 async def api_capes_mine(request: web.Request):
@@ -366,6 +445,7 @@ async def api_capes_mine(request: web.Request):
         return e
     p = player(uid)
     mine = [c for c in cape_list() if not c.get("owner") or c.get("owner") == uid]
+    mine = sort_capes(mine, "popular")
     return ok(capes=mine, current=p.get("cape", ""))
 
 
@@ -385,6 +465,12 @@ async def api_cape_set(request: web.Request):
         if c.get("owner") and c["owner"] != uid:
             return err("Это чужой плащ")
 
+    prev = p.get("cape", "")
+    if cid and cid != prev:
+        # считаем, сколько раз плащ надевали — на этом строится «Популярное»
+        c2 = DB["capes"].get(cid)
+        if c2 is not None:
+            c2["installs"] = int(c2.get("installs", 0) or 0) + 1
     p["cape"] = cid
     save_db(DB)
     return ok(cape=cid, url=cape_url(cid) if cid else "")
@@ -450,7 +536,8 @@ async def api_cape_upload(request: web.Request):
     cid = "u" + uid.replace("-", "")[:12] + "-" + secrets.token_hex(3)
     with (CAPES_DIR / (cid + ".png")).open("wb") as f:
         f.write(blob)
-    DB["capes"][cid] = {"name": name, "author": p.get("name", ""), "owner": uid}
+    DB["capes"][cid] = {"name": name, "author": p.get("name", ""), "owner": uid,
+                        "created": now(), "installs": 0}
     p["cape"] = cid
     save_db(DB)
     return ok(id=cid, url=cape_url(cid))
@@ -530,7 +617,13 @@ async def api_admin_cape(request: web.Request):
             return err("Не разобрал base64")
         with (CAPES_DIR / (cid + ".png")).open("wb") as f:
             f.write(blob)
-    DB["capes"][cid] = {"name": name, "author": (d.get("author") or "Luxe Visuals")}
+    old = DB["capes"].get(cid) or {}
+    DB["capes"][cid] = {
+        "name": name,
+        "author": (d.get("author") or "Luxe Visuals"),
+        "created": old.get("created", now()),
+        "installs": old.get("installs", 0),
+    }
     save_db(DB)
     return ok(id=cid)
 
