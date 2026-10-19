@@ -1,7 +1,8 @@
 # Luxe Service
 
-Один сервис на два дела: **кто из друзей в лаунчере** и **каталог плащей**.
-Питон на aiohttp — то же самое, на чём работает телеграм-бот, деплой такой же.
+Один сервис на три дела: **кто из друзей в лаунчере**, **каталог плащей**
+и **скины без лицензии**. Питон на aiohttp — то же самое, на чём работает
+телеграм-бот, деплой такой же.
 
 ## Что нужно сделать на Render (примерно 10 минут)
 
@@ -90,6 +91,50 @@ POST /api/admin/del   {"id": "flame"}
 сами и на уже работающем сервисе (по одному разу на id: удалённый админом
 плащ не вернётся).
 
+## Скины без лицензии
+
+У лицензионного аккаунта скин живёт на серверах Mojang и виден всем без
+модов. У офлайн-игрока такого места нет, поэтому скин хранит этот сервис,
+а показывает его мод `Luxe Cape` — тот же, что рисует плащи. Видят такие
+скины те, у кого стоит мод, то есть пользователи лаунчера.
+
+Как это выглядит для игрока: в разделе «Скин» лаунчера кнопка сама
+меняется на «Сохранить скин в Luxe», «Мой скин из Luxe» и «Убрать скин
+из Luxe», а рядом написано, что скин увидят в сборках лаунчера.
+
+Что нужно сервису:
+
+- PNG ровно **64x64** (лаунчер сам приводит старый 64x32 к этому виду);
+- до 256 КБ;
+- модель — `classic` или `slim`.
+
+Файлы лежат в `data/skins/<uuid>.png`. Как и плащи, они живут до первого
+редеплоя на бесплатном тарифе (см. выше).
+
+Проверить руками:
+
+```powershell
+$r = Invoke-RestMethod -Method Post -Uri "https://<адрес>/api/login" `
+     -ContentType "application/json" -Body '{"offline":"Steve"}'
+$s = $r.session
+$png = [Convert]::ToBase64String([IO.File]::ReadAllBytes("skin.png"))
+
+# сохранить скин (Steve)
+Invoke-RestMethod -Method Post -Uri "https://<адрес>/api/skin/set" `
+     -Headers @{ "X-Session" = $s } -ContentType "application/json" `
+     -Body (@{ png = $png; model = "classic" } | ConvertTo-Json)
+
+# посмотреть, что сохранено
+Invoke-RestMethod -Uri "https://<адрес>/api/skin/mine" -Headers @{ "X-Session" = $s }
+
+# что видит мод про этих игроков
+Invoke-RestMethod -Uri "https://<адрес>/api/skins/bulk?u=$($r.uuid)"
+
+# убрать скин
+Invoke-RestMethod -Method Post -Uri "https://<адрес>/api/skin/clear" `
+     -Headers @{ "X-Session" = $s }
+```
+
 ## Проверка руками (без лаунчера)
 
 ```powershell
@@ -132,6 +177,11 @@ Invoke-RestMethod -Uri "https://<адрес>/api/friends" -Headers @{ "X-Session
 | POST | `/api/cape/upload` | лаунчер | залить свой плащ |
 | GET | `/api/capes/bulk` | **мод** | какие плащи у этих игроков |
 | GET | `/capes/<id>.png` | **мод** | картинка плаща |
+| POST | `/api/skin/set` | лаунчер | сохранить скин без лицензии (base64, 64x64) |
+| POST | `/api/skin/clear` | лаунчер | убрать скин без лицензии |
+| GET | `/api/skin/mine` | лаунчер | мой скин (url, model) |
+| GET | `/api/skins/bulk` | **мод** | какие скины у этих игроков |
+| GET | `/skins/<uuid>.png` | **мод** | картинка скина |
 | POST | `/api/admin/cape` | админ | добавить плащ в общий каталог |
 | POST | `/api/admin/del` | админ | убрать плащ из каталога |
 

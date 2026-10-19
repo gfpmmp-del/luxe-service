@@ -16,10 +16,16 @@ Render -> Web Service, порт берётся из PORT.
     POST /api/cape/set       надеть плащ (или снять: cape = "")
     POST /api/cape/upload    залить свой плащ (PNG 64x32, base64)
     GET  /api/capes/mine     что доступно лично мне
+    POST /api/skin/set       сохранить свой скин (PNG 64x64, base64) —
+                             для офлайн-игроков, без лицензии
+    POST /api/skin/clear     убрать свой скин
+    GET  /api/skin/mine      мой скин (url, model) или пусто
 
-  МОД ПЛАЩЕЙ (внутри игры)
+  МОД ПЛАЩЕЙ И СКИНОВ (внутри игры)
     GET  /api/capes/bulk?u=uuid1,uuid2,...   какие плащи у этих игроков
-    GET  /capes/<id>.png                     сама картинка
+    GET  /api/skins/bulk?u=uuid1,uuid2,...   какие Luxe-скины у этих игроков
+    GET  /capes/<id>.png                     сама картинка плаща
+    GET  /skins/<uuid>.png                   сама картинка скина
     GET  /api/mods                           какие есть сборки мода и для каких версий
     GET  /mods/<файл>.jar                    сам мод (лаунчер кладёт его в mods/ игры)
 
@@ -51,6 +57,7 @@ PUBLIC_URL = os.getenv("PUBLIC_URL", "").rstrip("/")
 BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data"
 CAPES_DIR = DATA_DIR / "capes"
+SKINS_DIR = DATA_DIR / "skins"
 PRESETS_DIR = BASE_DIR / "presets"
 MODS_DIR = BASE_DIR / "mods"
 DB_PATH = DATA_DIR / "data.json"
@@ -59,13 +66,14 @@ DB_PATH = DATA_DIR / "data.json"
 # Внутри джарника прописан тот же диапазон версий, так что несовместимая
 # сборка просто не загрузится — но лаунчер и так берёт нужную.
 MODS = [
-    ("luxecape-1.21-1.21.1.jar", ["1.21", "1.21.1"]),
-    ("luxecape-1.21.2-1.21.8.jar", ["1.21.2", "1.21.3", "1.21.4", "1.21.5",
-                                    "1.21.6", "1.21.7", "1.21.8"]),
-    ("luxecape-1.21.9-1.21.11.jar", ["1.21.9", "1.21.10", "1.21.11"]),
+    ("luxecape-1.1.0-1.21-1.21.1.jar", ["1.21", "1.21.1"]),
+    ("luxecape-1.1.0-1.21.2-1.21.8.jar", ["1.21.2", "1.21.3", "1.21.4", "1.21.5",
+                                           "1.21.6", "1.21.7", "1.21.8"]),
+    ("luxecape-1.1.0-1.21.9-1.21.11.jar", ["1.21.9", "1.21.10", "1.21.11"]),
 ]
 
 CAPES_DIR.mkdir(parents=True, exist_ok=True)
+SKINS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Онлайн держим в памяти: присутствие по своей природе недолговечно,
 # переживать перезапуск сервиса ему незачем.
@@ -73,6 +81,8 @@ ONLINE = {}
 ONLINE_TTL = 75          # секунд без heartbeat — считаем, что вышел
 MAX_CAPE_BYTES = 256 * 1024
 ALLOWED_CAPE_SIZE = (64, 32)
+MAX_SKIN_BYTES = 256 * 1024
+ALLOWED_SKIN_SIZE = (64, 64)
 
 # Плащи, которые есть у всех с самого начала. Картинки лежат рядом
 # в presets/ с такими же именами (см. docstring выше: каталог «из интернета»
@@ -187,7 +197,8 @@ def player(uuid: str, create: bool = True) -> dict:
     uuid = uuid.lower()
     p = DB["players"].get(uuid)
     if p is None and create:
-        p = {"name": "", "cape": "", "friends": [], "offline": True}
+        p = {"name": "", "cape": "", "friends": [], "offline": True,
+             "skin_model": "", "skin_v": 0}
         DB["players"][uuid] = p
     return p
 
@@ -556,6 +567,135 @@ async def cape_file(request: web.Request):
 
 
 # ============================================================
+#  СКИНЫ БЕЗ ЛИЦЕНЗИИ
+#
+#  У лицензионного аккаунта скин живёт на серверах Mojang и виден всем.
+#  У офлайн-игрока такого места нет, поэтому скин храним у себя и
+#  раздаём моду: тот подставляет текстуру по uuid игрока.
+#  Видят её те, у кого стоит мод Luxe (он уже ставится лаунчером).
+# ============================================================
+
+def skin_url(uid: str) -> str:
+    base = PUBLIC_URL or ""
+    return f"{base}/skins/{uid}.png"
+
+
+def skin_state(uid: str) -> dict:
+    """Скин игрока: пусто, если его нет или файл потерялся."""
+    p = DB["players"].get(uid.lower()) or {}
+    v = int(p.get("skin_v", 0) or 0)
+    if v <= 0 or not (SKINS_DIR / (uid.lower() + ".png")).exists():
+        return {}
+    return {
+        "url": skin_url(uid.lower()) + "?v=" + str(v),
+        "model": p.get("skin_model") or "classic",
+        "v": v,
+    }
+
+
+async def api_skin_set(request: web.Request):
+    import base64
+    import io
+
+    uid, e = await me(request)
+    if e:
+        return e
+    d = await json_body(request)
+    raw = d.get("png") or ""
+    model = "slim" if (d.get("model") or "").strip().lower() == "slim" else "classic"
+    if not raw:
+        return err("Нужен PNG в base64")
+    if "," in raw[:80]:
+        raw = raw.split(",", 1)[1]
+    try:
+        blob = base64.b64decode(raw)
+    except Exception:
+        return err("Не разобрал base64")
+    if len(blob) > MAX_SKIN_BYTES:
+        return err("Файл больше 256 КБ")
+    try:
+        from PIL import Image
+        im = Image.open(io.BytesIO(blob))
+        if im.size != ALLOWED_SKIN_SIZE:
+            return err("Скин — PNG 64x64, а тут " + str(im.size[0]) + "x" + str(im.size[1]))
+        if im.mode != "RGBA":
+            im = im.convert("RGBA")
+        buf = io.BytesIO()
+        im.save(buf, format="PNG")
+        blob = buf.getvalue()
+    except ImportError:
+        pass          # без Pillow просто положим как есть
+    except Exception as ex:
+        return err("Картинка не читается: " + str(ex))
+
+    p = player(uid)
+    with (SKINS_DIR / (uid + ".png")).open("wb") as f:
+        f.write(blob)
+    p["skin_model"] = model
+    p["skin_v"] = int(now())
+    save_db(DB)
+    return ok(url=skin_url(uid) + "?v=" + str(p["skin_v"]), model=model, v=p["skin_v"])
+
+
+async def api_skin_clear(request: web.Request):
+    uid, e = await me(request)
+    if e:
+        return e
+    p = player(uid)
+    p["skin_model"] = ""
+    p["skin_v"] = 0
+    try:
+        (SKINS_DIR / (uid + ".png")).unlink()
+    except Exception:
+        pass
+    save_db(DB)
+    return ok()
+
+
+async def api_skin_mine(request: web.Request):
+    uid, e = await me(request)
+    if e:
+        return e
+    st = skin_state(uid)
+    if not st:
+        return ok(url="", model="", v=0)
+    return ok(**st)
+
+
+async def api_skins_bulk(request: web.Request):
+    """Мод спрашивает пачкой: у кого из этих игроков есть Luxe-скин."""
+    raw = request.query.get("u", "")
+    ids = [x.strip().lower() for x in raw.split(",") if x.strip()]
+    if not ids:
+        return web.json_response({})
+    out = {}
+    for u in ids[:200]:
+        try:
+            key = str(uuidlib.UUID(u))
+        except Exception:
+            key = offline_uuid(u).lower()
+        st = skin_state(key)
+        if st:
+            out[key] = st
+    return web.json_response(out)
+
+
+async def skin_file(request: web.Request):
+    name = request.match_info["name"]
+    try:
+        key = str(uuidlib.UUID(name))
+    except Exception:
+        raise web.HTTPNotFound()
+    path = SKINS_DIR / (key + ".png")
+    if path.exists():
+        return web.FileResponse(path, headers={
+            "Content-Type": "image/png",
+            "Cache-Control": "public, max-age=600",
+        })
+    raise web.HTTPNotFound()
+
+
+# ============================================================
 #  РАЗДАЧА МОДА ПЛАЩЕЙ
 # ============================================================
 
@@ -667,6 +807,11 @@ def make_app() -> web.Application:
         web.post("/api/cape/set", api_cape_set),
         web.post("/api/cape/upload", api_cape_upload),
         web.get("/capes/{cid}.png", cape_file),
+        web.post("/api/skin/set", api_skin_set),
+        web.post("/api/skin/clear", api_skin_clear),
+        web.get("/api/skin/mine", api_skin_mine),
+        web.get("/api/skins/bulk", api_skins_bulk),
+        web.get("/skins/{name}.png", skin_file),
         web.get("/api/mods", api_mods),
         web.get("/mods/{name}", mod_file),
         web.post("/api/admin/cape", api_admin_cape),
